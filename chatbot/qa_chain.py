@@ -1,0 +1,76 @@
+# qa_chain.py
+import os
+import logging
+from typing import Dict, Any
+import google.generativeai as genai
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chains import RetrievalQA
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+
+logger = logging.getLogger(__name__)
+
+CUSTOM_PROMPT = PromptTemplate.from_template(
+    """Use the following context to answer the question. 
+If you don't know the answer, say you don't know. Never make up answers.
+Context: {context}
+Question: {question}
+Helpful Answer:"""
+)
+
+
+def _handle_gemini_error(e: Exception) -> str:
+    """Process Gemini-specific errors"""
+    if "SAFETY" in str(e):
+        return "My response was blocked due to safety concerns. Please rephrase your question."
+    return "Sorry, I encountered an error. Please try again."
+
+
+def build_qa_chain(retriever):
+    """Creates RAG chain with proper document context"""
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        temperature=0.2,
+        google_api_key=os.getenv("GOOGLE_API_KEY")
+    )
+
+    return RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",
+        retriever=retriever,
+        return_source_documents=True,
+        chain_type_kwargs={
+            "prompt": PromptTemplate(
+                template="""Use the following context to answer the question. 
+                If you don't know the answer, say you don't know. Never make up answers.
+                Context: {context}
+                Question: {question}
+                Helpful Answer:""",
+                input_variables=["context", "question"]
+            )
+        }
+    )
+
+def get_answer(qa_chain: RetrievalQA, query: str) -> Dict[str, Any]:
+    """Safe query execution with error boundaries"""
+    try:
+        result = qa_chain.invoke({"query": query})
+        print("DEBUG - Full invoke result:", result)
+        if not result or "result" not in result:
+            return {"answer": "No answer generated", "sources": []}
+
+        # Process source documents
+        sources = [doc.metadata.get("source", "") for doc in result.get("source_documents", [])]
+        return {
+            "answer": result["result"],
+            "sources": list(set(sources)),
+            "error": None
+        }
+
+    except Exception as e:
+        logger.error(f"Query failed: {query} - {str(e)}")
+        return {
+            "answer": _handle_gemini_error(e),
+            "sources": [],
+            "error": str(e)
+        }

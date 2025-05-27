@@ -1,0 +1,14 @@
+streamlit
+langchain
+langchain-google-genai
+langchain-community  # Compatible version
+langchain-core
+google-generativeai
+python-dotenv==1.0.1
+dateparser
+phonenumbers
+email-validator
+pandas
+faiss-cpu
+streamlit-chat
+python-magic-bin
