@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 CUSTOM_PROMPT = PromptTemplate.from_template(
     """Use the following context to answer the question. 
-If you don't know the answer, say you don't know. Never make up answers.
+If the context doesn't contain the answer, say "I couldn't find relevant information in the document."
 Context: {context}
 Question: {question}
 Helpful Answer:"""
@@ -24,7 +24,6 @@ def _handle_gemini_error(e: Exception) -> str:
     if "SAFETY" in str(e):
         return "My response was blocked due to safety concerns. Please rephrase your question."
     return "Sorry, I encountered an error. Please try again."
-
 
 def build_qa_chain(retriever):
     """Creates RAG chain with proper document context"""
@@ -40,17 +39,9 @@ def build_qa_chain(retriever):
         retriever=retriever,
         return_source_documents=True,
         chain_type_kwargs={
-            "prompt": PromptTemplate(
-                template="""Use the following context to answer the question. 
-                If you don't know the answer, say you don't know. Never make up answers.
-                Context: {context}
-                Question: {question}
-                Helpful Answer:""",
-                input_variables=["context", "question"]
-            )
+            "prompt": CUSTOM_PROMPT  # Use the updated prompt
         }
     )
-
 def get_answer(qa_chain: RetrievalQA, query: str) -> Dict[str, Any]:
     """Safe query execution with error boundaries"""
     try:

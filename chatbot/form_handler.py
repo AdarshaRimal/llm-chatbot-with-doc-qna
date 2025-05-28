@@ -97,4 +97,6 @@ class AppointmentForm:
         self.data = {}
 
     def should_start(self, user_input: str) -> bool:
-        return "appointment" in user_input.lower()
+        """Check if user wants to book appointment"""
+        keywords = ["appointment", "schedule", "book a meeting", "call", "consultation"]
+        return any(kw in user_input.lower() for kw in keywords)

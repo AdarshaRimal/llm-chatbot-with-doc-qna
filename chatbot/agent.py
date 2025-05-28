@@ -4,7 +4,6 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 import logging
 
 logger = logging.getLogger(__name__)
-
 def build_agent(llm, tools, system_message, memory=None):
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_message),
@@ -21,5 +20,5 @@ def build_agent(llm, tools, system_message, memory=None):
         memory=memory,
         verbose=True,
         handle_parsing_errors=True,
-        max_iterations=3
+        max_iterations=5  # Increased to allow more steps
     )

@@ -14,7 +14,8 @@ from chatbot.agent import build_agent
 
 load_dotenv()
 
-st.set_page_config(page_title="PalmMind AI Assistant", page_icon="🤖", layout="centered")
+st.set_page_config(page_title="AI Assistant", page_icon="🤖", layout="centered")
+
 
 class SessionState:
     def __init__(self):
@@ -25,17 +26,21 @@ class SessionState:
         self.agent = None
         self.form = AppointmentForm()
         self.processing_lock = False
+        self.document_processed = False  # Track document state
+        self.current_document_name = None  # Track document name
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             temperature=0.3,
             google_api_key=os.getenv("GOOGLE_API_KEY")
         )
-        # Add conversation memory here
+        # Enhanced conversation memory
         self.memory = ConversationBufferWindowMemory(
             memory_key="chat_history",
-            k=10,  # Keep last 10 messages in memory
+            k=20,  # Increased memory capacity
             return_messages=True
         )
+        self.in_form_mode = False
+
 
 def initialize_session():
     if "state" not in st.session_state:
@@ -51,10 +56,27 @@ def build_base_agent():
             description="Schedule appointments or calls"
         )
     ]
+
+    system_msg = (
+        "You are a helpful assistant with two capabilities:\n"
+        "1. Answer general questions using your knowledge\n"
+        "2. Book appointments when requested\n\n"
+        "Rules:\n"
+        "- If the user wants to book an appointment, use the BookAppointment tool\n"
+        "- For all other questions, answer directly using your knowledge\n\n"
+        "When using a tool, respond exactly as:\n"
+        "Thought: <your thought>\n"
+        "Action: <tool name>\n"
+        "Action Input: <input>\n\n"
+        "If you know the final answer, respond with:\n"
+        "Final Answer: <your answer>\n\n"
+        "Begin!\n"
+    )
+
     return build_agent(
         llm=st.session_state.state.llm,
         tools=tools,
-        system_message="You are a helpful assistant. Ask for documents if needed.",
+        system_message=system_msg,
         memory=st.session_state.state.memory
     )
 
@@ -63,13 +85,7 @@ def build_document_agent(retriever):
 
     def document_qa_func(query: str) -> str:
         result = get_answer(doc_qa_chain, query)
-        answer = result["answer"]
-
-        # Update conversation memory manually to remember document Q&A context
-        st.session_state.state.memory.chat_memory.add_user_message(query)
-        st.session_state.state.memory.chat_memory.add_ai_message(answer)
-
-        return answer
+        return result["answer"]
 
     tools = [
         Tool(
@@ -84,22 +100,28 @@ def build_document_agent(retriever):
         )
     ]
 
+    system_msg = (
+        f"You are analyzing: {st.session_state.state.current_document_name}\n\n"
+        "You have access to two tools:\n"
+        "1. DocumentQA - Use for ANY questions about the current document\n"
+        "2. BookAppointment - Use to schedule appointments\n\n"
+        "Rules:\n"
+        "- For any question that might be answered by the document, use DocumentQA first\n"
+        "- If DocumentQA returns 'I couldn't find relevant information', then answer using your own knowledge\n"
+        "- If the user wants to book an appointment, use BookAppointment\n\n"
+        "When using a tool, respond exactly as:\n"
+        "Thought: <your thought>\n"
+        "Action: <tool name>\n"
+        "Action Input: <input>\n\n"
+        "If you know the final answer, respond with:\n"
+        "Final Answer: <your answer>\n\n"
+        "Begin!\n"
+    )
+
     return build_agent(
         llm=st.session_state.state.llm,
         tools=tools,
-        system_message=(
-            "You are a helpful assistant with access to two tools:\n"
-            "1. DocumentQA - Use this tool to answer any questions about the uploaded document.\n"
-            "2. BookAppointment - Use this tool to schedule appointments.\n\n"
-            "When you want to use a tool, respond exactly in the following format:\n"
-            "Thought: <your thought>\n"
-            "Action: <tool name>\n"
-            "Action Input: <input for the tool as plain text>\n\n"
-            "If you know the final answer without using a tool, respond with:\n"
-            "Final Answer: <your answer>\n\n"
-            "Do not use JSON, do not add code blocks or markdown formatting.\n"
-            "Begin!\n"
-        ),
+        system_message=system_msg,
         memory=st.session_state.state.memory
     )
 
@@ -114,14 +136,24 @@ def process_uploaded_file(uploaded_file):
         vector_mgr = VectorStoreManager()
         vector_store = vector_mgr.create_store(chunks)
 
+        # Update document state
         st.session_state.state.vector_store = vector_store
+        st.session_state.state.document_processed = True
+        st.session_state.state.current_document_name = uploaded_file.name
         st.session_state.state.agent = build_document_agent(vector_store.as_retriever())
+
+        # Add document context to memory
+        st.session_state.state.memory.chat_memory.add_ai_message(
+            f"📄 Ready to answer questions about: {uploaded_file.name}"
+        )
+
         os.unlink(temp_path)
         st.success("✅ Document processed successfully!")
     except Exception as e:
         import traceback
         st.error(f"❌ Error processing document: {str(e)}")
         st.text(traceback.format_exc())
+
 
 def handle_user_input(user_input: str):
     state = st.session_state.state
@@ -131,27 +163,29 @@ def handle_user_input(user_input: str):
 
     state.processing_lock = True
     try:
-        if state.form.active or state.form.should_start(user_input):
-            # Your form logic here if using form-based interaction
-            pass
-        else:
-            doc_keywords = ["document", "summary", "summarize", "extract", "fact", "pdf", "file"]
-            if any(kw in user_input.lower() for kw in doc_keywords):
-                if state.vector_store is None:
-                    response_text = "Please provide the document you would like me to summarize."
-                    state.chat_history.extend([
-                        {"role": "user", "content": user_input},
-                        {"role": "assistant", "content": response_text}
-                    ])
-                    return
+        # Handle form interactions first
+        if state.form.active:
+            response, completed = state.form.handle_input(user_input)
+            state.chat_history.append({"role": "assistant", "content": response})
+            if completed:
+                state.in_form_mode = False
+            return
 
-            if state.agent:
-                response = state.agent.invoke({"input": user_input})
-                clean_response = response["output"].split("SOURCES:")[0].strip()
-                state.chat_history.extend([
-                    {"role": "user", "content": user_input},
-                    {"role": "assistant", "content": clean_response}
-                ])
+        # Check if we should start form
+        if state.form.should_start(user_input):
+            response = state.form.agent_trigger(user_input)
+            state.chat_history.append({"role": "assistant", "content": response})
+            state.in_form_mode = True
+            return
+
+        # Process normal queries
+        if state.agent:
+            response = state.agent.invoke({"input": user_input})
+            clean_response = response["output"].split("SOURCES:")[0].strip()
+            state.chat_history.extend([
+                {"role": "user", "content": user_input},
+                {"role": "assistant", "content": clean_response}
+            ])
 
     except Exception as e:
         error_msg = f"⚠️ System error: {str(e)}"
@@ -159,18 +193,35 @@ def handle_user_input(user_input: str):
     finally:
         state.processing_lock = False
 
+
 def reset_chat():
-    st.session_state.state.chat_history = []
-    st.session_state.state.form = AppointmentForm()
-    st.session_state.state.vector_store = None
-    st.session_state.state.agent = build_base_agent()
-    st.session_state.state.uploaded_file = None
-    # Reset memory as well
-    st.session_state.state.memory = ConversationBufferWindowMemory(
-        memory_key="chat_history",
-        k=10,
-        return_messages=True
-    )
+    state = st.session_state.state
+    state.chat_history = []
+    state.form = AppointmentForm()
+    state.vector_store = None
+    state.document_processed = False
+    state.uploaded_file = None
+
+    # Preserve document context if available
+    if state.current_document_name:
+        doc_name = state.current_document_name
+        state.memory = ConversationBufferWindowMemory(
+            memory_key="chat_history",
+            k=20,
+            return_messages=True
+        )
+        # Add document context back to memory
+        state.memory.chat_memory.add_ai_message(
+            f"Document context preserved: {doc_name}"
+        )
+    else:
+        state.memory = ConversationBufferWindowMemory(
+            memory_key="chat_history",
+            k=20,
+            return_messages=True
+        )
+
+    state.agent = build_base_agent()
     st.success("🔄 Chat and session reset!")
 
 
@@ -188,15 +239,16 @@ def render_sidebar():
             st.session_state.state.vector_store = None
             process_uploaded_file(uploaded_file)
             st.session_state.state.uploaded_file = uploaded_file
-            st.success("✅ Document uploaded and processed! You can now ask questions.")
 
     if st.sidebar.button("🧹 Reset Chat"):
         reset_chat()
 
+
 def render_chat():
-    st.header("🤖 PalmMind AI Assistant")
+    st.header("🤖 AI Assistant")
     for idx, msg in enumerate(st.session_state.state.chat_history):
         message(msg["content"], is_user=(msg["role"] == "user"), key=f"chat_{idx}_{msg['role']}")
+
 
 def render_form_progress():
     if st.session_state.state.form.active:
@@ -204,6 +256,7 @@ def render_form_progress():
         total_steps = len(AppointmentForm.FORM_STEPS)
         st.progress(current_step / total_steps)
         st.caption(f"Step {current_step} of {total_steps}")
+
 
 def main():
     initialize_session()
@@ -223,7 +276,8 @@ def main():
 
     st.button("Send", on_click=on_send_click)
     st.markdown("---")
-    st.caption("PalmMind AI Assistant v1.0 | Chat with or without documents")
+    st.caption("AI Assistant  | Chat with or without documents")
+
 
 if __name__ == "__main__":
     main()
