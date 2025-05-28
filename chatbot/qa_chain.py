@@ -1,12 +1,9 @@
-# qa_chain.py
 import os
 import logging
 from typing import Dict, Any
-import google.generativeai as genai
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 
 logger = logging.getLogger(__name__)
 

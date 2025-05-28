@@ -3,8 +3,6 @@ import logging
 from typing import Optional
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain.storage import LocalFileStore
-from langchain.embeddings import CacheBackedEmbeddings
 
 logger = logging.getLogger(__name__)
 

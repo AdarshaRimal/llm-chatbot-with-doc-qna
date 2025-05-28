@@ -1,7 +1,6 @@
 import re
 import logging
 from datetime import datetime,timedelta
-import dateparser
 import phonenumbers
 from email_validator import validate_email, EmailNotValidError
 from dateparser.search import search_dates
@@ -40,7 +39,7 @@ def parse_natural_date(text: str) -> datetime | None:
 
         today = datetime.now().date()
 
-        # Fix for 'next Monday' giving a past date
+
         if re.search(r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", text.lower()):
             if date.date() <= today:
                 print(f"[DEBUG] Detected past date for 'next weekday'. Bumping by 7 days.")
